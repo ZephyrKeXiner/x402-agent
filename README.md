@@ -53,6 +53,7 @@ coda
 | `/tokens` | Show token usage     |
 | `/model`  | Show current model   |
 | `/resume` | Resume session       |
+| `/worktree` | Show git worktree status |
 | `/help`   | Show help            |
 | `/exit`   | Exit                 |
 
@@ -67,6 +68,8 @@ coda
 | `grep`       | Search keyword in file with line numbers       |
 | `bash`       | Execute shell command                          |
 | `subagent`   | Spawn sub-agent for independent subtasks       |
+| `worktree`   | Manage git worktrees for parallel development  |
+| `create_pr`  | Create a GitHub Pull Request                   |
 
 ## Configuration
 
@@ -98,6 +101,8 @@ src/
     server.ts           - MCP server skeleton
   sandbox/
     e2b.ts              - E2B cloud sandbox integration
+  tools/
+    worktree.ts         - Git worktree management and PR creation
   __tests__/
     test.ts             - Test suite
 bin/

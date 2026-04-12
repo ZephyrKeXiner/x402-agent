@@ -2,15 +2,24 @@
 import dotenv from "dotenv";
 import OpenAI from "openai";
 import * as readline from "readline";
-import { exec, execSync } from "node:child_process";
+import { exec, execFileSync } from "node:child_process";
 import { Read, Ls, Write, Grep, Edit, ReadImage } from "./tools/fileSystem.js";
 import { toolDefinition } from "./types/tool_def.js";
 import { isDangerous } from "./tools/safety.js";
 import { trimMessages } from "./utils/tokens.js";
 import { loadMessages, saveMessages, listSessions } from "./memory/session.js";
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { McpClient } from "./mcp/client.js";
 import { E2BSandbox, killSandbox } from "./sandbox/e2b.js";
+import {
+  listWorktrees,
+  createWorktree,
+  removeWorktree,
+  switchWorktree,
+  createPullRequest,
+  formatWorktreeList,
+} from "./tools/worktree.js";
 import { promisify } from "node:util";
 
 const execPromise = promisify(exec);
@@ -30,7 +39,7 @@ for (const [name, config] of Object.entries(mcpConfig.mcpServers)) {
     toolDefinition.push({
       type: "function",
       function: {
-        name: `mcp_${name}_${tool.name}`,
+        name: `mcp__${name}__${tool.name}`,
         description: tool.description,
         parameters: tool.inputSchema,
       },
@@ -112,6 +121,18 @@ const baseToolHandlers: Record<
   bash: async (args) => {
     const cmd = args.command as string;
     console.log(`${colors.tool}[bash] ${cmd}${colors.reset}`);
+
+    // Guard: detect `cd` commands that would escape the project root
+    const cdMatch = cmd.match(/\bcd\s+(.+)$/);
+    if (cdMatch) {
+      const target = cdMatch[1].trim().replace(/^["']|["']$/g, "");
+      const resolved = path.resolve(process.cwd(), target);
+      const cwd = process.cwd();
+      if (resolved !== cwd && !resolved.startsWith(cwd + path.sep)) {
+        return `Error: Cannot change directory outside the project root. "${target}" resolves to "${resolved}", which is outside "${cwd}".`;
+      }
+    }
+
     if (isDangerous(cmd)) {
       const confirmed = await confirmDangerous(cmd);
       if (!confirmed) {
@@ -148,10 +169,54 @@ const baseToolHandlers: Record<
   sandbox: async (args) => {
     return await E2BSandbox(args.command);
   },
+  worktree: async (args) => {
+    const action = args.action as string;
+    switch (action) {
+      case "list": {
+        const worktrees = listWorktrees();
+        return formatWorktreeList(worktrees);
+      }
+      case "create": {
+        if (!args.branch) {
+          return "Error: 'branch' is required for 'create' action.";
+        }
+        const result = createWorktree(
+          args.branch as string,
+          args.base_branch as string | undefined,
+          args.switch_to as boolean | undefined,
+        );
+        return `Worktree created successfully!\n  Branch: ${result.branch}\n  Path: ${result.path}${result.switched ? "\n  Switched to worktree directory." : ""}\n\nUse 'worktree' action 'switch' with path "${result.path}" to switch to this worktree, or set switch_to=true when creating.`;
+      }
+      case "remove": {
+        if (!args.worktree_path) {
+          return "Error: 'worktree_path' is required for 'remove' action. Use 'list' action first to find the path.";
+        }
+        return removeWorktree(args.worktree_path as string);
+      }
+      case "switch": {
+        if (!args.worktree_path) {
+          return "Error: 'worktree_path' is required for 'switch' action. Use 'list' action first to find the path.";
+        }
+        return switchWorktree(args.worktree_path as string);
+      }
+      default:
+        return `Error: Unknown worktree action '${action}'. Valid actions: create, list, remove, switch.`;
+    }
+  },
+  create_pr: async (args) => {
+    return createPullRequest({
+      title: args.title as string,
+      body: args.body as string | undefined,
+      base: args.base as string | undefined,
+      head: args.head as string | undefined,
+      draft: args.draft as boolean | undefined,
+      push: args.push as boolean | undefined,
+    });
+  },
 };
 
 // ─── Build initial context ──────────────────────────────────────────
-const filetree = execSync(`ls ${process.cwd()}`).toString();
+const filetree = execFileSync("ls", [process.cwd()], { encoding: "utf-8" }).trim();
 
 const systemPrompt: string = `You are a coding agent assistant. The file structure: ${filetree}.
 
@@ -208,7 +273,7 @@ export async function runAgent(
       );
       const subMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] =
         [
-          { role: "system", content: args.systemPrompt },
+          { role: "system", content: args.systemprompt },
           {
             role: "user",
             content: [{ type: "text", text: args.prompt }],
@@ -289,10 +354,11 @@ export async function runAgent(
                 const args = JSON.parse(call.function.arguments);
                 let result: string;
 
-                if (call.function.name.startsWith("mcp")) {
-                  const parts = call.function.name.split("_");
+                if (call.function.name.startsWith("mcp__")) {
+                  // Double-underscore separator: mcp__<serverName>__<toolName>
+                  const parts = call.function.name.split("__");
                   const serverName = parts[1];
-                  const toolName = parts.slice(2).join("_");
+                  const toolName = parts.slice(2).join("__");
                   const client = mcpClients.get(serverName);
                   if (!client)
                     throw new Error(`MCP server not found: ${serverName}`);
@@ -480,8 +546,17 @@ async function handleSlashCommand(input: string): Promise<boolean> {
     return true;
   }
   if (trimmed === "/resume") {
-    const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] =
-      await loadMessages(session_id);
+    const loaded = await loadMessages(session_id);
+    messages.length = 0;
+    messages.push(...loaded);
+    // Re-inject system prompt
+    if (messages.length > 0 && messages[0].role === "system") {
+      messages[0] = { role: "system", content: systemPrompt };
+    } else {
+      messages.unshift({ role: "system", content: systemPrompt });
+    }
+    console.log(`${colors.success}✓ Session resumed.${colors.reset}`);
+    return true;
   }
   if (trimmed.startsWith("/collab ")) {
     const task = trimmed.slice("/collab ".length).trim();
@@ -494,12 +569,22 @@ async function handleSlashCommand(input: string): Promise<boolean> {
     await collaborate(task);
     return true;
   }
+  if (trimmed === "/worktree") {
+    try {
+      const worktrees = listWorktrees();
+      console.log(formatWorktreeList(worktrees));
+    } catch (e: any) {
+      console.log(`${colors.error}${e.message}${colors.reset}`);
+    }
+    return true;
+  }
   if (trimmed === "/help") {
     console.log(`${colors.info}Available commands:
   /clear           - Clear conversation history
   /tokens          - Show token usage statistics
   /model           - Show current model
   /collab <task>   - Multi-agent collaboration (coder + reviewer)
+  /worktree        - Show git worktree status
   /help            - Show this help message
   /exit            - Exit the program
   /resume          - Resume the session${colors.reset}`);

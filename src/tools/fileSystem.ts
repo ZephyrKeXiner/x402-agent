@@ -35,8 +35,9 @@ export function isImagePath(filePath: string): boolean {
 export function safePath(filePath: string): string {
   const start = performance.now();
   try {
-    const resolved = path.resolve(process.cwd(), filePath);
-    if (!resolved.startsWith(process.cwd())) {
+    const cwd = process.cwd();
+    const resolved = path.resolve(cwd, filePath);
+    if (resolved !== cwd && !resolved.startsWith(cwd + path.sep)) {
       throw new Error(
         `Access denied: path "${filePath}" is outside the project directory.`,
       );

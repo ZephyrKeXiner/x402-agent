@@ -6,6 +6,10 @@ export function estimateTokens(
   let text = "";
   if (typeof message.content === "string") {
     text = message.content;
+  } else if (Array.isArray(message.content)) {
+    text = message.content
+      .map((part: any) => part.text || "")
+      .join(" ");
   } else if (message.content === null || message.content === undefined) {
     text = "";
   }
