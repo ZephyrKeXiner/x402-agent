@@ -377,6 +377,92 @@ export async function runAgent(
   }
 }
 
+// ─── Multi-agent collaboration ─────────────────────────────────────
+async function collaborate(
+  task: string,
+  maxRounds: number = 3,
+): Promise<string> {
+  console.log(
+    `\n${colors.info}[collab] Starting collaboration (max ${maxRounds} rounds)${colors.reset}`,
+  );
+
+  // Round 0: Coder 写代码
+  const coderMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+    {
+      role: "system",
+      content: `You are a skilled programmer. ${systemPrompt}
+Write clean, production-quality code based on the user's requirement.
+When you receive review feedback, revise your code accordingly.`,
+    },
+    { role: "user", content: task },
+  ];
+
+  console.log(`\n${colors.success}═══ Coder (round 1) ═══${colors.reset}`);
+  let code = await runAgent(coderMessages, 1);
+
+  for (let round = 0; round < maxRounds; round++) {
+    const reviewerMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] =
+      [
+        {
+          role: "system",
+          content: `You are a strict code reviewer. Review the code below for:
+- Bugs and logic errors
+- Security vulnerabilities
+- Edge cases not handled
+- Code quality and readability
+
+If the code is good enough for production, respond with exactly "LGTM" and nothing else.
+Otherwise, list specific issues with line references and suggest fixes.`,
+        },
+        { role: "user", content: `Review this code:\n\n${code}` },
+      ];
+
+    console.log(
+      `\n${colors.error}═══ Reviewer (round ${round + 1}) ═══${colors.reset}`,
+    );
+    const review = await runAgent(reviewerMessages, 1);
+
+    if (review.toUpperCase().includes("LGTM")) {
+      console.log(
+        `\n${colors.success}[collab] ✓ Approved after ${round + 1} round(s)${colors.reset}`,
+      );
+      messages.push(
+        { role: "user", content: task },
+        {
+          role: "assistant",
+          content: `[Collaboration completed in ${round + 1} round(s)]\n\n${code}`,
+        },
+      );
+      return code;
+    }
+
+    coderMessages.push(
+      { role: "assistant", content: code },
+      {
+        role: "user",
+        content: `Code review feedback:\n${review}\n\nPlease fix the issues above.`,
+      },
+    );
+
+    console.log(
+      `\n${colors.success}═══ Coder (round ${round + 2}) ═══${colors.reset}`,
+    );
+    code = await runAgent(coderMessages, 1);
+  }
+
+  console.log(
+    `\n${colors.info}[collab] Max rounds reached, returning latest version${colors.reset}`,
+  );
+  messages.push(
+    { role: "user", content: task },
+    {
+      role: "assistant",
+      content: `[Collaboration completed (max rounds)]\n\n${code}`,
+    },
+  );
+  return code;
+}
+
 // ─── Slash commands ─────────────────────────────────────────────────
 async function handleSlashCommand(input: string): Promise<boolean> {
   const trimmed = input.trim();
@@ -397,14 +483,26 @@ async function handleSlashCommand(input: string): Promise<boolean> {
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] =
       await loadMessages(session_id);
   }
+  if (trimmed.startsWith("/collab ")) {
+    const task = trimmed.slice("/collab ".length).trim();
+    if (!task) {
+      console.log(
+        `${colors.error}Usage: /collab <task description>${colors.reset}`,
+      );
+      return true;
+    }
+    await collaborate(task);
+    return true;
+  }
   if (trimmed === "/help") {
     console.log(`${colors.info}Available commands:
-  /clear   - Clear conversation history
-  /tokens  - Show token usage statistics
-  /model   - Show current model
-  /help    - Show this help message
-  /exit    - Exit the program${colors.reset}
-  /resume  - resume the session`);
+  /clear           - Clear conversation history
+  /tokens          - Show token usage statistics
+  /model           - Show current model
+  /collab <task>   - Multi-agent collaboration (coder + reviewer)
+  /help            - Show this help message
+  /exit            - Exit the program
+  /resume          - Resume the session${colors.reset}`);
     return true;
   }
   if (trimmed === "/exit" || trimmed === "/quit") {

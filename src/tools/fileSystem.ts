@@ -169,7 +169,10 @@ export async function ReadImage(imagePath: string) {
     console.log(
       `[ReadImage] ${(raw.length / 1024).toFixed(0)}KB → ${(compressed.length / 1024).toFixed(0)}KB`,
     );
-    return { dataUri: `data:image/jpeg;base64,${base64}`, size: compressed.length };
+    return {
+      dataUri: `data:image/jpeg;base64,${base64}`,
+      size: compressed.length,
+    };
   } finally {
     const duration = (performance.now() - start).toFixed(2);
     console.log(`[ReadImage] "${imagePath}" executed in ${duration}ms`);

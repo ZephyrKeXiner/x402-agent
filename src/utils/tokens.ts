@@ -1,6 +1,8 @@
 import OpenAI from "openai";
 
-export function estimateTokens(message: OpenAI.Chat.Completions.ChatCompletionMessageParam): number {
+export function estimateTokens(
+  message: OpenAI.Chat.Completions.ChatCompletionMessageParam,
+): number {
   let text = "";
   if (typeof message.content === "string") {
     text = message.content;
@@ -17,7 +19,7 @@ export function estimateTokens(message: OpenAI.Chat.Completions.ChatCompletionMe
 export function trimMessages(
   messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[],
   lastPromptTokens: number,
-  maxContextTokens: number
+  maxContextTokens: number,
 ): void {
   if (lastPromptTokens < maxContextTokens * 0.8) return;
 
