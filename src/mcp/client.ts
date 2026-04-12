@@ -1,11 +1,13 @@
 import { ChildProcess, spawn } from "child_process";
 import { Interface, createInterface } from "readline";
 
+const MCP_REQUEST_TIMEOUT = 30_000;
+
 export class McpClient {
   private process: ChildProcess;
   private rl: Interface;
   private nextId = 1;
-  private pending = new Map<number, (result: any) => void>();
+  private pending = new Map<number, { resolve: (result: any) => void; reject: (err: Error) => void }>();
 
   constructor(command: string, args: string[]) {
     this.process = spawn(command, args, {
@@ -15,18 +17,31 @@ export class McpClient {
     this.rl = createInterface({ input: this.process.stdout! });
     this.rl.on("line", (line) => {
       const msg = JSON.parse(line);
-      const resolve = this.pending.get(msg.id);
-      if (resolve) {
-        resolve(msg.result);
+      const entry = this.pending.get(msg.id);
+      if (entry) {
         this.pending.delete(msg.id);
+        if (msg.error) {
+          entry.reject(new Error(msg.error.message || JSON.stringify(msg.error)));
+        } else {
+          entry.resolve(msg.result);
+        }
       }
     });
   }
 
-  request(method: string, params?: any): Promise<any> {
+  request(method: string, params?: any, timeoutMs: number = MCP_REQUEST_TIMEOUT): Promise<any> {
     const id = this.nextId++;
-    return new Promise((resolve) => {
-      this.pending.set(id, resolve);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`MCP request "${method}" timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      this.pending.set(id, {
+        resolve: (result) => { clearTimeout(timer); resolve(result); },
+        reject: (err) => { clearTimeout(timer); reject(err); },
+      });
+
       const msg = JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n";
       this.process.stdin!.write(msg);
     });

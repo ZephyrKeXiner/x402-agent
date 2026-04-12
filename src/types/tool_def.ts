@@ -181,4 +181,91 @@ export const toolDefinition: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "worktree",
+      description:
+        "Manage git worktrees for parallel development on different branches. " +
+        "Actions: 'create' - create a new worktree + branch, 'list' - list all worktrees, " +
+        "'remove' - remove a worktree, 'switch' - switch to a different worktree. " +
+        "Worktrees allow you to work on multiple branches simultaneously without stashing or committing.",
+      parameters: {
+        type: "object",
+        properties: {
+          action: {
+            type: "string",
+            enum: ["create", "list", "remove", "switch"],
+            description: "The worktree action to perform",
+          },
+          branch: {
+            type: "string",
+            description:
+              "The branch name for 'create' action. Will be created if it doesn't exist.",
+          },
+          base_branch: {
+            type: "string",
+            description:
+              "The base branch to create the new branch from (for 'create' action). Defaults to current branch.",
+          },
+          worktree_path: {
+            type: "string",
+            description:
+              "The worktree path for 'remove' or 'switch' action. Use the path returned by 'list' action.",
+          },
+          switch_to: {
+            type: "boolean",
+            description:
+              "Whether to switch to the new worktree immediately after creation (for 'create' action). Default: false.",
+          },
+        },
+        required: ["action"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_pr",
+      description:
+        "Create a GitHub Pull Request from the current branch. " +
+        "This will push the branch to origin and create a PR using the GitHub CLI (gh). " +
+        "Make sure you have committed your changes before calling this. " +
+        "Requires GitHub CLI to be installed and authenticated.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: {
+            type: "string",
+            description: "The title of the pull request",
+          },
+          body: {
+            type: "string",
+            description:
+              "The body/description of the pull request. Supports GitHub-flavored markdown.",
+          },
+          base: {
+            type: "string",
+            description:
+              "The base branch to merge into. Defaults to the repository's default branch.",
+          },
+          head: {
+            type: "string",
+            description:
+              "The head branch (source). Defaults to the current branch.",
+          },
+          draft: {
+            type: "boolean",
+            description: "Create as a draft pull request. Default: false.",
+          },
+          push: {
+            type: "boolean",
+            description:
+              "Push the branch to origin before creating the PR. Default: true.",
+          },
+        },
+        required: ["title"],
+      },
+    },
+  },
 ];
