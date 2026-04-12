@@ -2,6 +2,31 @@ import { readdirSync, existsSync, statSync } from "fs";
 import { writeFile, readFile, mkdir } from "fs/promises";
 import path from "path";
 import { performance } from "perf_hooks";
+import sharp from "sharp";
+
+const IMAGE_EXTENSIONS = new Set([
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".bmp",
+  ".svg",
+]);
+
+const MIME_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".bmp": "image/bmp",
+  ".svg": "image/svg+xml",
+};
+
+export function isImagePath(filePath: string): boolean {
+  return IMAGE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
 
 /**
  * Resolve and validate a file path, ensuring it stays within the project root.
@@ -118,5 +143,35 @@ export async function Edit(
   } finally {
     const duration = (performance.now() - start).toFixed(2);
     console.log(`[Edit] "${filePath}" executed in ${duration}ms`);
+  }
+}
+
+export async function ReadImage(imagePath: string) {
+  const start = performance.now();
+
+  try {
+    const resolved = safePath(imagePath);
+    if (!existsSync(resolved)) {
+      throw new Error(`Image not found: ${imagePath}`);
+    }
+    if (!isImagePath(resolved)) {
+      throw new Error(
+        `"${imagePath}" isn't an image or the format is unsupported`,
+      );
+    }
+    const raw = await readFile(resolved);
+    // 压缩：缩到最大 1024px，转 JPEG quality 80
+    const compressed = await sharp(raw)
+      .resize(1024, 1024, { fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 80 })
+      .toBuffer();
+    const base64 = compressed.toString("base64");
+    console.log(
+      `[ReadImage] ${(raw.length / 1024).toFixed(0)}KB → ${(compressed.length / 1024).toFixed(0)}KB`,
+    );
+    return { dataUri: `data:image/jpeg;base64,${base64}`, size: compressed.length };
+  } finally {
+    const duration = (performance.now() - start).toFixed(2);
+    console.log(`[ReadImage] "${imagePath}" executed in ${duration}ms`);
   }
 }

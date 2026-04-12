@@ -1,4 +1,3 @@
-import { CommandExitError } from "e2b";
 import OpenAI from "openai";
 
 export const toolDefinition: OpenAI.Chat.Completions.ChatCompletionTool[] = [
@@ -159,6 +158,26 @@ export const toolDefinition: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           },
         },
         required: ["command"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "read_image",
+      description:
+        "Read an image file and return its visual content for analysis. " +
+        "Use this when you need to see/analyze an image file in the project ",
+      parameters: {
+        type: "object",
+        properties: {
+          image_path: {
+            type: "string",
+            description:
+              "The path of the image that you want to read or analyze",
+          },
+        },
+        required: ["image_path"],
       },
     },
   },

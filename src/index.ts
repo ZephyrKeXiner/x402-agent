@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 import OpenAI from "openai";
 import * as readline from "readline";
 import { exec, execSync } from "node:child_process";
-import { Read, Ls, Write, Grep, Edit } from "./tools/fileSystem.js";
+import { Read, Ls, Write, Grep, Edit, ReadImage } from "./tools/fileSystem.js";
 import { toolDefinition } from "./types/tool_def.js";
 import { isDangerous } from "./tools/safety.js";
 import { trimMessages } from "./utils/tokens.js";
@@ -178,11 +178,27 @@ export async function runAgent(
   messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[],
   depth: number = 0,
 ): Promise<string> {
+  const deferredMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] =
+    [];
+
   const toolHandlers: Record<
     string,
     (args: Record<string, any>) => Promise<string>
   > = {
     ...baseToolHandlers,
+    read_image: async (args) => {
+      const { dataUri, size } = await ReadImage(args.image_path);
+      deferredMessages.push({
+        role: "user",
+        content: [
+          {
+            type: "image_url",
+            image_url: { url: dataUri, detail: "low" },
+          },
+        ],
+      } as any);
+      return `Image loaded: ${args.image_path} (${(size / 1024).toFixed(1)}KB). The image is now visible to you.`;
+    },
     subagent: async (args) => {
       if (depth + 1 > MAX_DEPTH) {
         return `Error: max sub-agent depth (${MAX_DEPTH}) exceeded`;
@@ -193,7 +209,10 @@ export async function runAgent(
       const subMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] =
         [
           { role: "system", content: args.systemPrompt },
-          { role: "user", content: args.prompt },
+          {
+            role: "user",
+            content: [{ type: "text", text: args.prompt }],
+          },
         ];
       return await runAgent(subMessages, depth + 1);
     },
@@ -308,10 +327,35 @@ export async function runAgent(
         );
 
         messages.push(...toolResults);
+        // 图片等延迟消息在 tool results 之后注入，保证消息顺序正确
+        if (deferredMessages.length > 0) {
+          messages.push(...deferredMessages);
+          deferredMessages.length = 0;
+        }
         trimMessages(messages, lastPromptTokens, MAX_CONTEXT_TOKENS);
       } else if (finishReason === "stop") {
         process.stdout.write("\n");
         messages.push({ role: "assistant", content: fullContext });
+        for (let i = 0; i < messages.length; i++) {
+          const msg = messages[i] as any;
+          if (msg.role === "user" && Array.isArray(msg.content)) {
+            const hasImage = msg.content.some(
+              (part: any) => part.type === "image_url",
+            );
+            if (hasImage) {
+              let turnsSince = 0;
+              for (let j = i + 1; j < messages.length; j++) {
+                if (messages[j].role === "assistant") turnsSince++;
+              }
+              if (turnsSince >= 3) {
+                messages[i] = {
+                  role: "user",
+                  content: "[image was previously provided and analyzed]",
+                };
+              }
+            }
+          }
+        }
         trimMessages(messages, lastPromptTokens, MAX_CONTEXT_TOKENS);
         return fullContext;
       } else {
@@ -412,7 +456,6 @@ const session_id = await selectSession();
 const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] =
   await loadMessages(session_id);
 
-// 总是用最新的 system prompt
 if (messages.length > 0 && messages[0].role === "system") {
   messages[0] = { role: "system", content: systemPrompt };
 } else {

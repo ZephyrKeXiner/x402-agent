@@ -31,6 +31,7 @@
     "dotenv": "^17.3.1",
     "e2b": "^2.18.0",
     "openai": "^6.32.0",
+    "sharp": "^0.34.5",
     "vectra": "^0.12.3"
   },
   "devDependencies": {
