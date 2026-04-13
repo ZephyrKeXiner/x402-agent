@@ -7,6 +7,7 @@ import { Read, Ls, Write, Grep, Edit, ReadImage } from "./tools/fileSystem.js";
 import { toolDefinition } from "./types/tool_def.js";
 import { isDangerous } from "./tools/safety.js";
 import { trimMessages } from "./utils/tokens.js";
+import { repeatGuard } from "./utils/repeatGuard.js";
 import { loadMessages, saveMessages, listSessions } from "./memory/session.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -108,8 +109,13 @@ async function confirmDangerous(command: string): Promise<boolean> {
 // estimateTokens and trimMessages imported from utils.ts
 
 function printUsageStats(): void {
+  const guardStats = repeatGuard.getStats();
+  const repeatInfo =
+    guardStats.topRepeated.length > 0
+      ? ` | repeats: ${guardStats.topRepeated.join(", ")}`
+      : "";
   console.log(
-    `${colors.info}[tokens] prompt: ${totalTokensUsed.prompt} | completion: ${totalTokensUsed.completion} | total: ${totalTokensUsed.total}${colors.reset}`,
+    `${colors.info}[tokens] prompt: ${totalTokensUsed.prompt} | completion: ${totalTokensUsed.completion} | total: ${totalTokensUsed.total}${repeatInfo}${colors.reset}`,
   );
 }
 
@@ -352,32 +358,68 @@ export async function runAgent(
             .map(async (call) => {
               try {
                 const args = JSON.parse(call.function.arguments);
+                const toolName = call.function.name;
                 let result: string;
 
-                if (call.function.name.startsWith("mcp__")) {
+                // ── Repeat guard: 检查重复调用 ──
+                const guard = repeatGuard.check(toolName, args);
+                if (!guard.allowed) {
+                  // 拦截：不执行工具，直接返回原因
+                  const cached = guard.cachedResult
+                    ? `\n\n--- Cached result from previous call ---\n${guard.cachedResult}`
+                    : "";
+                  console.log(
+                    `${colors.error}[repeat-guard] Blocked ${toolName} (called ${guard.callCount}x)${colors.reset}`,
+                  );
+                  return {
+                    role: "tool" as const,
+                    tool_call_id: call.id,
+                    content: `${guard.reason}${cached}`,
+                  };
+                }
+
+                // ── 执行工具 ──
+                if (toolName.startsWith("mcp__")) {
                   // Double-underscore separator: mcp__<serverName>__<toolName>
-                  const parts = call.function.name.split("__");
+                  const parts = toolName.split("__");
                   const serverName = parts[1];
-                  const toolName = parts.slice(2).join("__");
+                  const mcpToolName = parts.slice(2).join("__");
                   const client = mcpClients.get(serverName);
                   if (!client)
                     throw new Error(`MCP server not found: ${serverName}`);
-                  const mcpResult = await client.callTool(toolName, args);
+                  const mcpResult = await client.callTool(mcpToolName, args);
                   result = JSON.stringify(mcpResult);
                 } else {
-                  const handler = toolHandlers[call.function.name];
+                  const handler = toolHandlers[toolName];
                   console.log(
-                    `${colors.tool}[tool] ${call.function.name}${colors.reset}`,
+                    `${colors.tool}[tool] ${toolName}${colors.reset}`,
                   );
                   if (!handler)
-                    throw new Error(`Unknown tool: ${call.function.name}`);
-                  result = await handler(args);
+                    throw new Error(`Unknown tool: ${toolName}`);
+
+                  if (guard.cachedResult !== undefined) {
+                    // 只读工具命中缓存：跳过执行，直接用缓存结果
+                    result = guard.cachedResult;
+                    console.log(
+                      `${colors.info}[repeat-guard] Cache hit for ${toolName} (${guard.callCount}x)${colors.reset}`,
+                    );
+                  } else {
+                    result = await handler(args);
+                  }
                 }
+
+                // ── Repeat guard: 记录调用结果 ──
+                repeatGuard.record(toolName, args, result);
+
+                // 如果有警告（未拦截但重复），追加到结果中
+                const suffix = guard.reason
+                  ? `\n\n${guard.reason}`
+                  : "";
 
                 return {
                   role: "tool" as const,
                   tool_call_id: call.id,
-                  content: result || "(empty result)",
+                  content: result + suffix || "(empty result)",
                 };
               } catch (e: any) {
                 console.log(
@@ -534,11 +576,18 @@ async function handleSlashCommand(input: string): Promise<boolean> {
   const trimmed = input.trim();
   if (trimmed === "/clear") {
     messages.length = 1;
+    repeatGuard.clear();
     console.log(`${colors.success}✓ Conversation cleared.${colors.reset}`);
     return true;
   }
   if (trimmed === "/tokens") {
     printUsageStats();
+    const guardStats = repeatGuard.getStats();
+    if (guardStats.trackedCalls > 0) {
+      console.log(
+        `${colors.info}[dedup] tracked: ${guardStats.trackedCalls} calls${guardStats.topRepeated.length > 0 ? ` | top: ${guardStats.topRepeated.join(", ")}` : ""}${colors.reset}`,
+      );
+    }
     return true;
   }
   if (trimmed === "/model") {
