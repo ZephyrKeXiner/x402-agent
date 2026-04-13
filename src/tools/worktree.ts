@@ -352,6 +352,97 @@ export function createPullRequest(options: {
   }
 }
 
+// ─── Merge PR & cleanup ────────────────────────────────────────────
+
+/**
+ * Merge a PR, then clean up the branch and its worktree.
+ *
+ * Steps:
+ *  1. `gh pr merge` to merge the PR
+ *  2. Switch back to main worktree if currently in the feature worktree
+ *  3. Remove the worktree (if exists)
+ *  4. Delete the local branch
+ *  5. Delete the remote branch
+ */
+export function mergePullRequest(options: {
+  pr: string;
+  method?: "merge" | "squash" | "rebase";
+  deleteBranch?: boolean;
+}): string {
+  checkGitRepo();
+  const start = performance.now();
+
+  try {
+    const { pr, method = "squash", deleteBranch = true } = options;
+    const results: string[] = [];
+
+    // 1. Merge the PR
+    const mergeArgs = ["pr", "merge", pr, `--${method}`];
+    if (deleteBranch) mergeArgs.push("--delete-branch");
+    const mergeOutput = gh(mergeArgs);
+    results.push(`✓ PR ${pr} merged (${method})`);
+
+    // 2. Get the branch name from the PR
+    let branchName: string | undefined;
+    try {
+      branchName = gh(["pr", "view", pr, "--json", "headRefName", "-q", ".headRefName"]);
+    } catch {
+      // PR already merged, try to get from local context
+      branchName = undefined;
+    }
+
+    if (branchName) {
+      // 3. Clean up worktree if it exists
+      const worktrees = listWorktrees();
+      const featureWorktree = worktrees.find((w) => w.branch === branchName);
+
+      if (featureWorktree) {
+        // Switch back to main if we're in the feature worktree
+        if (featureWorktree.isCurrent) {
+          const mainTree = worktrees.find((w) => w.isMain);
+          if (mainTree) {
+            process.chdir(mainTree.path);
+            results.push(`✓ Switched back to ${mainTree.branch}`);
+          }
+        }
+        try {
+          git(["worktree", "remove", featureWorktree.path]);
+          git(["worktree", "prune"]);
+          results.push(`✓ Worktree removed: ${featureWorktree.path}`);
+        } catch {
+          try {
+            git(["worktree", "remove", "--force", featureWorktree.path]);
+            git(["worktree", "prune"]);
+            results.push(`✓ Worktree force-removed: ${featureWorktree.path}`);
+          } catch { /* best effort */ }
+        }
+      }
+
+      // 4. Delete local branch
+      try {
+        git(["branch", "-d", branchName]);
+        results.push(`✓ Local branch deleted: ${branchName}`);
+      } catch {
+        try {
+          git(["branch", "-D", branchName]);
+          results.push(`✓ Local branch force-deleted: ${branchName}`);
+        } catch { /* already deleted or current */ }
+      }
+
+      // 5. Pull latest main
+      try {
+        git(["pull", "--ff-only"]);
+        results.push("✓ Main branch updated");
+      } catch { /* best effort */ }
+    }
+
+    return results.join("\n");
+  } finally {
+    const duration = (performance.now() - start).toFixed(2);
+    console.log(`[mergePullRequest] executed in ${duration}ms`);
+  }
+}
+
 // ─── Formatting helpers ─────────────────────────────────────────────
 
 export function formatWorktreeList(worktrees: WorktreeInfo[]): string {

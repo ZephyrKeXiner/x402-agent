@@ -19,6 +19,7 @@ import {
   removeWorktree,
   switchWorktree,
   createPullRequest,
+  mergePullRequest,
   formatWorktreeList,
 } from "./tools/worktree.js";
 import { promisify } from "node:util";
@@ -217,6 +218,12 @@ const baseToolHandlers: Record<
       head: args.head as string | undefined,
       draft: args.draft as boolean | undefined,
       push: args.push as boolean | undefined,
+    });
+  },
+  merge_pr: async (args) => {
+    return mergePullRequest({
+      pr: args.pr as string,
+      method: args.method as "merge" | "squash" | "rebase" | undefined,
     });
   },
 };

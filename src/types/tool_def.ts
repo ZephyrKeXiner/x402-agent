@@ -268,4 +268,30 @@ export const toolDefinition: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "merge_pr",
+      description:
+        "Merge a GitHub Pull Request and automatically clean up: " +
+        "removes the worktree, deletes the local and remote branch, " +
+        "and pulls latest main. Use this after a PR is approved.",
+      parameters: {
+        type: "object",
+        properties: {
+          pr: {
+            type: "string",
+            description:
+              "The PR number or URL to merge (e.g. '5' or the full URL)",
+          },
+          method: {
+            type: "string",
+            enum: ["merge", "squash", "rebase"],
+            description: "Merge method. Default: squash.",
+          },
+        },
+        required: ["pr"],
+      },
+    },
+  },
 ];
